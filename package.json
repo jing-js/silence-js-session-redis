@@ -1,6 +1,6 @@
 {
   "name": "silence-js-session-redis",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "redis session for silence-js",
   "main": "index.js",
   "scripts": {
@@ -17,7 +17,6 @@
   },
   "homepage": "https://github.com/jing-js/silence-js-session-redis#readme",
   "dependencies": {
-    "redis": "^2.6.2",
-    "silence-js": "^1.0.0"
+    "redis": "^2.6.2"
   }
 }

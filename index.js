@@ -1,76 +1,124 @@
 'use strict';
 
-const SilenceJS = require('silence-js');
 const redis = require('redis');
+const REMEMBER_PROP = '____$$$$REMEMBER$$$$____';
 
-class RedisSessionStore extends BaseSessionStore {
-  constructor(config, logger) {
-    super(logger);
-    let me = this;
-
-    this.redisClient = redis.createClient(config.port, config.host);
-    redis.debug_mode = config.debug || false;
-
-    this.redisClient.on('error', function(err) {
-      me.logger.error('redis error: %s', err.toString());
-    });
-    this.redisClient.on('ready', function() {
-      me._resolve('ready');
-    });
+class RedisSessionStore {
+  constructor(config) {
+    this.logger = config.logger;
+    this.SessionUser = config.UserClass;
+    this.tokenType = config.type === 'token' ? true : false;
+    this.expireTime = config.expireTime || 30 * 60;
+    this.rememberTime = config.rememberTime || 14 * 24 * 60 * 60;
+    this.sessionKey = config.sessionKey || 'SILENCE_SESSION';
+    this.port = config.port || 6379;
+    this.host = config.host || '127.0.0.1';
+    this.redisClient = null;
   }
-  get(sessionId) {
-    let redis = this.redisClient;
-    let logger = this.logger;
-    logger.debug('try get sessionId: ' + sessionId);
+  init() {
     return new Promise((resolve, reject) => {
-      ////每取一次都重新更新过期时间，保证用户每次刷新页面都可以延迟登录过期时间。
-      redis.get(sessionId, function(err, result) {
-        if (err) {
-          reject(err);
-          return;
-        }
-        if (!result) {
-          resolve(null);
-          return;
-        }
-        let user;
-        try {
-          user = JSON.parse(result);
-        } catch(e) {
-          reject(e);
-          return;
-        }
-        logger.debug(`get redis session of '${sessionId}': ${result}`);
-        redis.expire(sessionId,
-          user.remember === true ? LONG_EXPIRE_TIME : EXPIRE_TIME,
-          function (err) {
-            if (err) {
-              logger.error(`redis [expire] error: ${err.message}`);
-            }
-          }
-        );
-        resolve(user);
+      this.redisClient = redis.createClient(this.port, this.host);
+      this.redisClient.on('error', err => {
+        this.logger.error('REDIS ERROR:');
+        this.logger.error(err);
       });
-
-    });
-  }
-  set(sessionId, sessionUser) {
-    let redis = this.redisClient;
-    let logger = this.logger;
-    logger.debug('try set sessionId' + sessionId);
-    return new Promise((resolve, reject) => {
-      redis.setex([sessionId, sessionUser.remember ? LONG_EXPIRE_TIME : EXPIRE_TIME,
-        JSON.stringify(sessionUser)], err => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(true);
-        }
+      this.redisClient.on('ready', () => {
+        resolve();
       });
     });
   }
   close() {
-    this.redisClient.end();
+    return new Promise((resolve, reject) => {
+      this.redisClient.end(err => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+    })
+  }
+  createUser() {
+    return new this.SessionUser();
+  }
+  touch(ctx) {
+    return new Promise((resolve, reject) => {
+      let sid = this.tokenType ? ctx.query[this.sessionKey] : ctx.cookie.get(this.sessionKey);
+      if (!sid) {
+        return resolve();
+      }
+      this.redisClient.get(sid, (err, result) => {
+        if (err) {
+          return reject(err);
+        }
+        if (!result) {
+          return resolve();
+        }
+        let data;
+        try {
+          data = JSON.parse(result);
+        } catch(e) {
+          return reject(e);
+        }
+        this.logger.debug(`get redis session of '${sid}': ${result}`);
+        this.redisClient.expire(sid, data[REMEMBER_PROP] ? this.rememberTime : this.expireTime, err => {
+          if (err) {
+            return reject(err);
+          }
+          if (ctx._user === null) {
+            ctx._user = new this.SessionUser();
+          }
+          ctx._user.sessionId = sid;
+          data && ctx._user.assign(data);
+          ctx._user.isLogin = true;
+          resolve();
+        });
+      });
+    });
+  }
+  login(ctx, remember) {
+    return new Promise((resolve, reject) => {
+      if (ctx._user === null) {
+        return resolve(false);
+      }
+      if (remember) {
+        ctx._user.attrs[REMEMBER_PROP] = true;
+      }
+      this.redisClient.setex([
+        ctx._user.sessionId,
+        remember ? this.rememberTime : this.expireTime,
+        JSON.stringify(ctx._user.attrs)
+      ], err => {
+        if (err) {
+          return reject(err);
+        }
+        if (!this.tokenType) {
+          ctx.cookie.set(this.sessionKey, ctx._user.sessionId, {
+            expires: new Date(Date.now() + (remember ? this.rememberTime : this.expireTime) * 1000)
+          });
+        }
+        ctx._user.isLogin = true;
+        resolve(true);
+      });
+    });
+  }
+  logout(ctx) {
+    return new Promise((resolve, reject) => {
+      if (!ctx._user) {
+        return resolve(false);
+      }
+      if (!this.tokenType) {
+        ctx.cookie.set(this.sessionKey, '');
+      }
+      this.redisClient.del(ctx._user.sessionId, err => {
+        if (err) {
+          reject(err);
+        } else {
+          ctx._user.isLogin = false;
+          resolve(true);
+        }
+      });
+    });
   }
 }
 
