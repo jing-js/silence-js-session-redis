@@ -1,12 +1,13 @@
 'use strict';
 
 const redis = require('redis');
+const util = require('silence-js-util');
 const REMEMBER_PROP = '____$$$$REMEMBER$$$$____';
 
 class RedisSessionStore {
   constructor(config) {
     this.logger = config.logger;
-    this.SessionUser = config.UserClass;
+    this.SessionUserFreeList = new util.FreeList(config.UserClass);
     this.tokenType = config.type === 'token' ? true : false;
     this.expireTime = config.expireTime || 30 * 60;
     this.rememberTime = config.rememberTime || 14 * 24 * 60 * 60;
@@ -28,18 +29,13 @@ class RedisSessionStore {
     });
   }
   close() {
-    return new Promise((resolve, reject) => {
-      this.redisClient.end(err => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
-      });
-    })
+    this.redisClient.end();
   }
   createUser() {
-    return new this.SessionUser();
+    return this.SessionUserFreeList.alloc();
+  }
+  freeUser(user) {
+    this.SessionUserFreeList.free(user);
   }
   touch(ctx) {
     return new Promise((resolve, reject) => {
