@@ -62,7 +62,7 @@ class RedisSessionStore {
             return reject(err);
           }
           if (ctx._user === null) {
-            ctx._user = new this.SessionUser();
+            ctx._user = this.createUser();
           }
           ctx._user.sessionId = sid;
           data && ctx._user.assign(data);
